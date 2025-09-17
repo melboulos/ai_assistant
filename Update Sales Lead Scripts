@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+from couchbase.cluster import Cluster
+from couchbase.auth import PasswordAuthenticator
+from couchbase.options import ClusterOptions
+from couchbase.exceptions import DocumentNotFoundException
+from datetime import datetime, timezone
+import random
+
+# Couchbase connection config
+CB_CONN_STR = "couchbase://localhost"
+CB_USERNAME = "Administrator"
+CB_PASSWORD = "password"
+CB_BUCKET = "sales_lead"
+
+# Random value generators
+def random_lead_status():
+    return random.choice(["Prospect", "Qualified", "Negotiation", "Won", "Lost"])
+
+def random_pipeline_stage():
+    return random.choice(["Discovery", "Proposal Sent", "Contract Sent", "Negotiation", "Closed Won", "Closed Lost"])
+
+def random_notes():
+    notes_samples = [
+        "Contacted client, awaiting response.",
+        "Sent proposal, pending approval.",
+        "Negotiations ongoing, positive signs.",
+        "Lost contact, follow-up needed.",
+        "Client requested revised pricing."
+    ]
+    return random.choice(notes_samples)
+
+def random_lead_score(current_score):
+    delta = random.choice([-5, 5])
+    return max(0, min(100, current_score + delta))
+
+def update_document(doc):
+    if "sales_lead" not in doc:
+        return doc, False
+
+    audit_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_data = doc.get("old_data", {})
+    changed = False
+
+    # pipeline_stage
+    current_pipeline = doc["sales_lead"].get("pipeline_stage")
+    new_pipeline = random_pipeline_stage()
+    if new_pipeline != current_pipeline:
+        old_data["pipeline_stage"] = {"old_value": current_pipeline, "audit_date": audit_date}
+        doc["sales_lead"]["pipeline_stage"] = new_pipeline
+        changed = True
+
+    # lead_status
+    current_status = doc["sales_lead"].get("lead_status")
+    new_status = random_lead_status()
+    if new_status != current_status:
+        old_data["lead_status"] = {"old_value": current_status, "audit_date": audit_date}
+        doc["sales_lead"]["lead_status"] = new_status
+        changed = True
+
+    # notes
+    current_note = doc["sales_lead"].get("notes")
+    new_note = random_notes()
+    if new_note != current_note:
+        old_data["notes"] = {"old_value": current_note, "audit_date": audit_date}
+        doc["sales_lead"]["notes"] = new_note
+        changed = True
+
+    # lead_score
+    current_score = doc["sales_lead"].get("lead_score", 0)
+    new_score = random_lead_score(current_score)
+    if new_score != current_score:
+        old_data["lead_score"] = {"old_value": current_score, "audit_date": audit_date}
+        doc["sales_lead"]["lead_score"] = new_score
+        changed = True
+
+    # high_priority_flag based on lead_score
+    doc["sales_lead"]["high_priority_flag"] = doc["sales_lead"]["lead_score"] >= 80
+
+    if changed:
+        doc["old_data"] = old_data
+        return doc, True
+
+    return doc, False
+
+def main():
+    cluster = Cluster(CB_CONN_STR, ClusterOptions(PasswordAuthenticator(CB_USERNAME, CB_PASSWORD)))
+    bucket = cluster.bucket(CB_BUCKET)
+    collection = bucket.default_collection()
+
+    query = f'SELECT META().id FROM `{CB_BUCKET}`'
+    result = cluster.query(query)
+
+    total = 0
+    updated = 0
+
+    for row in result:
+        doc_id = row["id"]
+        try:
+            res = collection.get(doc_id)
+            doc = res.content_as[dict]
+
+            updated_doc, changed = update_document(doc)
+            if changed:
+                collection.upsert(doc_id, updated_doc)
+                updated += 1
+            total += 1
+
+        except DocumentNotFoundException:
+            continue
+
+    print(f"Processed {total} documents.")
+    print(f"Documents updated: {updated}")
+
+if __name__ == "__main__":
+    main()
