@@ -1,21 +1,26 @@
-Step-by-Step Process Flow
-1.	Lead Document Change
-o	A sales lead document in Couchbase is created or updated.
-2.	Eventing Function Trigger
-o	Couchbase Eventing triggers only if old_data exists, to prevent infinite loops.
-o	Eventing function builds a payload containing:
-	lead_id
-	sales_lead (current data)
-	old_data (previous values)
-3.	Flask Service
-o	Receives payload from Eventing.
-o	Formats values (e.g., currency, high-priority flags).
-o	Generates a natural language prompt for Bedrock.
-4.	AWS Bedrock LLM
-o	Receives prompt from Flask.
-o	Generates:
-	Executive Summary (2–3 sentences)
-	Recommendation (4–5 actionable bullet points)
-5.	Document Update in Couchbase
-o	Flask merges the new summary and recommendations with the existing document.
-o	Old data is preserved to prevent re-triggering Eventing unnecessarily.
+# Step-by-Step Process Flow
+
+1. **Lead Document Change**  
+   A sales lead document in Couchbase is created or updated.  
+
+2. **Eventing Function Trigger**  
+   - Couchbase Eventing triggers **only if `old_data` exists**, to prevent infinite loops.  
+   - Eventing function builds a payload containing:  
+     - `lead_id`  
+     - `sales_lead` (current data)  
+     - `old_data` (previous values)  
+  
+3. **Flask Service**  
+   - Receives payload from Eventing.  
+   - Formats values (e.g., currency, high-priority flags).  
+   - Generates a natural language prompt for Bedrock.  
+
+4. **AWS Bedrock LLM**  
+   - Receives prompt from Flask.  
+   - Generates:  
+     - **Executive Summary** (2–3 sentences)  
+     - **Recommendation** (4–5 actionable bullet points)  
+
+5. **Document Update in Couchbase**  
+   - Flask merges the new summary and recommendations with the existing document.  
+   - Old data is preserved to prevent re-triggering Eventing unnecessarily.
