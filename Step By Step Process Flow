@@ -1,26 +1,53 @@
-# Step-by-Step Process Flow
+# Sales Lead Processing Architecture
 
-1. **Lead Document Change**  
-   A sales lead document in Couchbase is created or updated.  
++------------------------+
+| 1. Couchbase Bucket    |
+|    `sales_lead`        |
+| - Stores sales lead    |
+|   documents            |
++-----------+------------+
+            |
+            v
++------------------------+
+| 2. Couchbase Eventing  |
+| - Triggered on document|
+|   updates              |
+| - Checks `old_data` to |
+|   prevent loops        |
+| - Builds payload:      |
+|   - lead_id            |
+|   - sales_lead         |
+|   - old_data           |
++-----------+------------+
+            |
+            v
++------------------------+
+| 3. Flask Service       |
+| - Receives payload     |
+| - Formats values       |
+|   (currency, flags)    |
+| - Generates prompt for |
+|   AWS Bedrock LLM      |
++-----------+------------+
+            |
+            v
++------------------------+
+| 4. AWS Bedrock LLM     |
+| - Receives prompt      |
+| - Generates:           |
+|   - Executive Summary  |
+|   - Recommendations    |
++-----------+------------+
+            |
+            v
++------------------------+
+| 5. Couchbase Update    |
+| - Flask merges summary |
+|   & recommendations    |
+| - Preserves `old_data` |
+| - Prevents re-trigger  |
++------------------------+
 
-2. **Eventing Function Trigger**  
-   - Couchbase Eventing triggers **only if `old_data` exists**, to prevent infinite loops.  
-   - Eventing function builds a payload containing:  
-     - `lead_id`  
-     - `sales_lead` (current data)  
-     - `old_data` (previous values)  
-  
-3. **Flask Service**  
-   - Receives payload from Eventing.  
-   - Formats values (e.g., currency, high-priority flags).  
-   - Generates a natural language prompt for Bedrock.  
-
-4. **AWS Bedrock LLM**  
-   - Receives prompt from Flask.  
-   - Generates:  
-     - **Executive Summary** (2–3 sentences)  
-     - **Recommendation** (4–5 actionable bullet points)  
-
-5. **Document Update in Couchbase**  
-   - Flask merges the new summary and recommendations with the existing document.  
-   - Old data is preserved to prevent re-triggering Eventing unnecessarily.
+# Optional: Additional Notes
+- High-priority leads are flagged based on `lead_score >= 80`.
+- Scripts can also generate random sales lead records (via Faker) and insert into Couchbase.
