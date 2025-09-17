@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+import json
+import random
+import uuid
+from datetime import datetime, timedelta
+from faker import Faker
+from couchbase.cluster import Cluster
+from couchbase.auth import PasswordAuthenticator
+from couchbase.options import ClusterOptions
+
+# Setup
+fake = Faker()
+cluster = Cluster("couchbase://localhost", ClusterOptions(PasswordAuthenticator("Administrator", "password")))
+bucket = cluster.bucket("sales_lead")
+collection = bucket.scope("_default").collection("_default")
+
+def random_date(start, end):
+    return (start + timedelta(days=random.randint(0, (end - start).days))).strftime("%Y-%m-%d")
+
+def generate_company_name():
+    suffixes = ["Inc.", "LLC", "Corp.", "Holdings", "Ventures", "Systems", "Solutions", "Partners", "Group"]
+    return f"{fake.company()} {random.choice(suffixes)}"
+
+def lead_score_weighted(last_deal_size, lead_status, pipeline_stage, crm_active):
+    score = random.randint(20, 50)
+    deal_score = min(last_deal_size / 166666, 30)
+    score += deal_score
+    status_scores = {"Won": 25, "Negotiation": 15, "Qualified": 10, "Prospect": 5, "Lost": -10}
+    score += status_scores.get(lead_status, 0)
+    pipeline_scores = {"Closed Won": 25, "Contract Sent": 15, "Proposal Sent": 10, "Discovery": 5, "Closed Lost": -10, "Negotiation": 20}
+    score += pipeline_scores.get(pipeline_stage, 0)
+    if crm_active:
+        score += 10
+    return min(max(int(score), 0), 100)
+
+def generate_random_record():
+    regions = ["North America", "Europe", "Southeast Asia", "South America", "Middle East", "Africa"]
+    lead_sources = ["Referral", "Cold Call", "Inbound Web Lead", "Trade Show", "Partner Referral", "Ad Campaign"]
+
+    lead_id = str(uuid.uuid4())
+    last_deal_size = random.randint(25_000, 5_000_000)
+    lead_status = random.choice(["Prospect", "Qualified", "Negotiation", "Won", "Lost"])
+    pipeline_stage = random.choice(["Discovery", "Proposal Sent", "Contract Sent", "Negotiation", "Closed Won", "Closed Lost"])
+    crm_activity = random.choice([True, False])
+    score = lead_score_weighted(last_deal_size, lead_status, pipeline_stage, crm_activity)
+
+    return {
+        "lead_id": lead_id,
+        "sales_lead": {
+            "company_name": generate_company_name(),
+            "quarter": "Q1 2025",
+            "market_cap_usd": random.randint(50_000_000, 10_000_000_000),
+            "annual_sales_usd": random.randint(5_000_000, 2_000_000_000),
+            "number_of_customers": random.randint(500, 100_000),
+            "primary_market_region": random.choice(regions),
+            "sales_contact_name": fake.name(),
+            "sales_contact_email": fake.email(),
+            "date_of_last_contact": random_date(datetime(2023, 6, 1), datetime(2024, 3, 31)),
+            "lead_status": lead_status,
+            "pipeline_stage": pipeline_stage,
+            "last_deal_size_usd": last_deal_size,
+            "lead_source": random.choice(lead_sources),
+            "notes": fake.sentence(nb_words=12),
+            "crm_activity_flag": crm_activity,
+            "lead_score": score,
+            "high_priority_flag": score >= 80
+        }
+    }
+
+# Generate and insert records
+num_records = 5
+success_count = 0
+error_count = 0
+
+for _ in range(num_records):
+    doc = generate_random_record()
+    doc_key = f"lead::{doc['lead_id']}"
+    try:
+        collection.insert(doc_key, doc)
+        success_count += 1
+    except Exception as e:
+        error_count += 1
+
+print(f"✅ Import completed: {success_count} records inserted, {error_count} errors.")
