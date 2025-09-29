@@ -131,24 +131,23 @@ Begin your response:
         response_body = json.loads(response['body'].read())
         generated_text = response_body.get("generation", "").strip()
 
+        # ------------------------------
         # Parse summary and recommendation
-        summary_match = re.search(r"(?i)summary:\s*(.*?)(?=\n\s*recommendation:|\Z)", generated_text, re.DOTALL)
-        recommendation_match = re.search(r"(?i)recommendation:\s*(.*)", generated_text, re.DOTALL)
+        # ------------------------------
+        summary = generated_text
+        recommendation = ""
 
-        summary = summary_match.group(1).strip() if summary_match else generated_text
-        recommendation = recommendation_match.group(1).strip() if recommendation_match else ""
+        # Extract recommendation from summary if embedded
+        rec_match = re.search(r'Recommendations?:\s*(.*)', summary, re.DOTALL | re.IGNORECASE)
+        if rec_match:
+            recommendation = clean_text(rec_match.group(1))
+            # Remove recommendation part from summary
+            summary = re.sub(r'Recommendations?:.*', '', summary, flags=re.DOTALL | re.IGNORECASE).strip()
 
-        # Cleanup
+        # Cleanup summary
         summary = clean_text(summary)
-        recommendation = clean_text(recommendation)
 
-        # Extract recommendation if embedded in summary
-        rec_from_summary = re.search(r'Recommendation:\s*(.*)', summary, re.DOTALL | re.IGNORECASE)
-        if rec_from_summary and not recommendation:
-            recommendation = rec_from_summary.group(1).strip()
-            summary = re.sub(r'Recommendation:.*', '', summary, flags=re.DOTALL | re.IGNORECASE).strip()
-
-        # Bullet points for recommendation
+        # Format recommendation into bullets
         recommendation = bullet_recommendation(recommendation)
 
         # High-priority flag
@@ -156,26 +155,25 @@ Begin your response:
             recommendation = "⚠️ High-priority lead!\n" + recommendation
 
         # ------------------------------
-        # Option 1: Merge with existing document to preserve old_data
+        # Merge with existing document in Couchbase
         # ------------------------------
         try:
-            # Get existing document if it exists
             existing_doc = {}
             try:
                 existing_doc = collection.get(doc_key).content_as[dict]
             except Exception:
                 pass  # doc might not exist yet
 
-            # Merge new fields, preserve old_data
             merged_doc = {
                 **existing_doc,  # keeps old_data and other fields
                 "sales_lead": sales_lead,
                 "summary": summary,
-                "recommendation": recommendation
+                "recommendation": recommendation,
+                "_enriched": True
             }
 
             collection.upsert(doc_key, merged_doc)
-            print(f"✅ Upserted document {doc_key} with old_data preserved")
+            print(f"✅ Upserted document {doc_key} with summary and recommendation")
 
         except Exception as e:
             print(f"❌ Couchbase upsert error for {doc_key}: {e}")
