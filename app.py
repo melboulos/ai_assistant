@@ -44,11 +44,22 @@ def clean_text(text):
     return text
 
 def bullet_recommendation(text):
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    return "\n".join([f"• {s.strip()}" for s in sentences if s.strip()])
+    """Convert sentences or numbered steps into clean bullet points"""
+    if not text:
+        return ""
+    # Split by sentence endings or existing numbered points
+    parts = re.split(r'\n|(?<=\.\s)', text)
+    bullets = []
+    for p in parts:
+        line = p.strip()
+        if line:
+            # Avoid duplicating bullet markers
+            line = re.sub(r'^[-•\d\.\s]+', '', line)
+            bullets.append(f"• {line}")
+    return "\n".join(bullets)
 
 def format_old_data(old_data):
-    """Create human-readable string describing changes."""
+    """Create human-readable string describing changes"""
     changes = []
     for field, change in old_data.items():
         old_value = change.get("old_value", "N/A")
@@ -70,7 +81,7 @@ def health():
 def generate_summary():
     try:
         data = request.get_json(force=True)
-        print("📥 Raw incoming request data:", data)
+        print("📥 Incoming request:", data)
 
         lead_id = data.get('lead_id')
         sales_lead = data.get('sales_lead')
@@ -79,7 +90,7 @@ def generate_summary():
         if not lead_id or not sales_lead:
             return jsonify({"error": "Missing lead_id or sales_lead"}), 400
 
-        # Normalize key to avoid double 'lead::'
+        # Normalize key
         doc_key = lead_id
         if doc_key.startswith("lead::lead::"):
             doc_key = doc_key.replace("lead::lead::", "lead::", 1)
@@ -89,18 +100,17 @@ def generate_summary():
         annual_sales = format_usd(sales_lead.get('annual_sales_usd', 0))
         last_deal = format_usd(sales_lead.get('last_deal_size_usd', 0))
 
-        # Include old_data changes in prompt
+        # Include old_data in prompt
         old_changes_text = format_old_data(old_data)
 
-        # Build prompt for Bedrock
+        # Build prompt
         prompt = f"""
 You are an expert enterprise sales strategist.
-Format all currency values as USD amounts with dollar signs and commas, e.g., $1,234,567.
+Format all currency values as USD with dollar signs and commas.
 
-Given the following sales lead data, generate:
-
-1. A 2–3 sentence executive summary highlighting changes since the previous record.
-2. A single-paragraph recommendation with 4–5 specific, actionable next steps.
+Generate:
+1. A 2–3 sentence executive summary of the sales event since previous record.
+2. A single-paragraph recommendation with 4–5 actionable steps.
 
 Previous changes:
 {old_changes_text if old_changes_text else "No prior changes recorded."}
@@ -117,10 +127,10 @@ Sales Contact: {sales_lead.get('sales_contact_name', 'N/A')}
 Notes: {sales_lead.get('notes', '')}
 High Priority Lead: {"Yes" if sales_lead.get('high_priority_flag', False) else "No"}
 
-Begin your response:
+Begin response with clear 'Summary:' and 'Recommendation:' sections.
 """
 
-        # Call Bedrock model
+        # Call Bedrock
         response = bedrock.invoke_model(
             modelId="meta.llama3-70b-instruct-v1:0",
             contentType="application/json",
@@ -131,52 +141,41 @@ Begin your response:
         response_body = json.loads(response['body'].read())
         generated_text = response_body.get("generation", "").strip()
 
-        # ------------------------------
-        # Parse summary and recommendation
-        # ------------------------------
-        summary = generated_text
-        recommendation = ""
+        # Parse summary/recommendation
+        summary_match = re.search(r"(?i)summary:\s*(.*?)(?=\n\s*recommendation:|\Z)", generated_text, re.DOTALL)
+        recommendation_match = re.search(r"(?i)recommendation:\s*(.*)", generated_text, re.DOTALL)
 
-        # Extract recommendation from summary if embedded
-        rec_match = re.search(r'Recommendations?:\s*(.*)', summary, re.DOTALL | re.IGNORECASE)
-        if rec_match:
-            recommendation = clean_text(rec_match.group(1))
-            # Remove recommendation part from summary
-            summary = re.sub(r'Recommendations?:.*', '', summary, flags=re.DOTALL | re.IGNORECASE).strip()
+        summary = clean_text(summary_match.group(1)) if summary_match else ""
+        recommendation = clean_text(recommendation_match.group(1)) if recommendation_match else ""
 
-        # Cleanup summary
-        summary = clean_text(summary)
+        # Deduplicate: remove recommendation from summary if present
+        if "recommendation" in summary.lower():
+            summary = re.sub(r"(?i)recommendation.*", "", summary, flags=re.DOTALL).strip()
 
-        # Format recommendation into bullets
+        # Bullet recommendation
         recommendation = bullet_recommendation(recommendation)
 
         # High-priority flag
         if sales_lead.get('high_priority_flag', False):
             recommendation = "⚠️ High-priority lead!\n" + recommendation
 
-        # ------------------------------
-        # Merge with existing document in Couchbase
-        # ------------------------------
+        # Merge with existing doc
+        existing_doc = {}
         try:
-            existing_doc = {}
-            try:
-                existing_doc = collection.get(doc_key).content_as[dict]
-            except Exception:
-                pass  # doc might not exist yet
+            existing_doc = collection.get(doc_key).content_as[dict]
+        except Exception:
+            pass  # doc might not exist yet
 
-            merged_doc = {
-                **existing_doc,  # keeps old_data and other fields
-                "sales_lead": sales_lead,
-                "summary": summary,
-                "recommendation": recommendation,
-                "_enriched": True
-            }
+        merged_doc = {
+            **existing_doc,
+            "sales_lead": sales_lead,
+            "summary": summary,
+            "recommendation": recommendation,
+            "_enriched": True
+        }
 
-            collection.upsert(doc_key, merged_doc)
-            print(f"✅ Upserted document {doc_key} with summary and recommendation")
-
-        except Exception as e:
-            print(f"❌ Couchbase upsert error for {doc_key}: {e}")
+        collection.upsert(doc_key, merged_doc)
+        print(f"✅ Upserted document {doc_key} with summary & recommendation")
 
         return jsonify({
             "lead_id": doc_key,
